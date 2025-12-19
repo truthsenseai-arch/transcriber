@@ -34,7 +34,7 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, { "Content-Type": "application/json" });
       return res.end(JSON.stringify({ text: transcription.text }));
     } catch (err) {
-      console.error("TRANSCRIBE ERROR:", err);
+     console.error("TRANSCRIBE ERROR:", err?.message, err?.stack);
       res.writeHead(500);
       return res.end(JSON.stringify({ error: err.message }));
     }
