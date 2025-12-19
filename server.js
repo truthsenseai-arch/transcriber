@@ -1,47 +1,33 @@
-import http from "http";
-import OpenAI from "openai";
-import { writeFile } from "fs/promises";
+app.post("/transcribe", upload.single("file"), async (req, res) => {
+  console.log("HIT /transcribe");
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+  try {
+    console.log("Headers:", req.headers);
+    console.log("File:", req.file);
 
-const server = http.createServer(async (req, res) => {
-  if (req.method === "GET") {
-    res.writeHead(200);
-    return res.end("TruthSense Transcriber OK");
-  }
-
-  if (req.method === "POST" && req.url === "/transcribe") {
-    try {
-      const formData = await req.formData();
-      const file = formData.get("file");
-
-      if (!file) {
-        res.writeHead(400);
-        return res.end(JSON.stringify({ error: "No file provided" }));
-      }
-
-      const buffer = Buffer.from(await file.arrayBuffer());
-      const path = `/tmp/audio-${Date.now()}.m4a`;
-      await writeFile(path, buffer);
-
-      const transcription = await openai.audio.transcriptions.create({
-        file: await import("fs").then(fs => fs.createReadStream(path)),
-        model: "gpt-4o-mini-transcribe",
-      });
-
-      res.writeHead(200, { "Content-Type": "application/json" });
-      return res.end(JSON.stringify({ text: transcription.text }));
-    } catch (err) {
-     console.error("TRANSCRIBE ERROR:", err?.message, err?.stack);
-      res.writeHead(500);
-      return res.end(JSON.stringify({ error: err.message }));
+    if (!req.file) {
+      console.error("NO FILE RECEIVED");
+      return res.status(400).json({ error: "No file uploaded" });
     }
+
+    const stream = fs.createReadStream(req.file.path);
+
+    console.log("Calling OpenAI...");
+
+    const transcription = await openai.audio.transcriptions.create({
+      file: stream,
+      model: "gpt-4o-mini-transcribe",
+    });
+
+    console.log("Transcription success");
+
+    res.json({ text: transcription.text });
+  } catch (err) {
+    console.error("TRANSCRIBE ERROR FULL:", err);
+    res.status(500).json({
+      error: err.message,
+      name: err.name,
+      stack: err.stack,
+    });
   }
-
-  res.writeHead(404);
-  res.end();
 });
-
-server.listen(process.env.PORT || 10000);
