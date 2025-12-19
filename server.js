@@ -18,7 +18,7 @@ const server = http.createServer(async (req, res) => {
       const file = formData.get("file");
 
       if (!file) {
-        res.writeHead(400);
+        res.writeHead(400, { "Content-Type": "application/json" });
         return res.end(JSON.stringify({ error: "No file provided" }));
       }
 
@@ -35,7 +35,7 @@ const server = http.createServer(async (req, res) => {
       return res.end(JSON.stringify({ text: transcription.text }));
     } catch (err) {
       console.error("TRANSCRIBE ERROR:", err);
-      res.writeHead(500);
+      res.writeHead(500, { "Content-Type": "application/json" });
       return res.end(JSON.stringify({ error: err.message }));
     }
   }
