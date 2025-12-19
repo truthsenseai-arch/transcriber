@@ -1,49 +1,53 @@
-import express from "express";
-import multer from "multer";
+import http from "http";
 import fs from "fs";
+import path from "path";
+import Busboy from "busboy";
 import OpenAI from "openai";
 
-const app = express();
-
-// Multer temp storage (Render-compatible)
-const upload = multer({
-  dest: "/tmp",
-});
-
-// OpenAI client
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-// Health check
-app.get("/", (req, res) => {
-  res.send("TruthSense Transcriber OK");
-});
+http.createServer((req, res) => {
+  if (req.method === "POST" && req.url === "/transcribe") {
+    const busboy = Busboy({ headers: req.headers });
+    let tempPath = null;
 
-// Transcription route
-app.post("/transcribe", upload.single("file"), async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ error: "No audio file uploaded" });
-    }
-
-    const transcription = await openai.audio.transcriptions.create({
-      file: fs.createReadStream(req.file.path),
-      model: "gpt-4o-mini-transcribe",
+    busboy.on("file", (_, file, info) => {
+      tempPath = `/tmp/audio-${Date.now()}.m4a`;
+      const writeStream = fs.createWriteStream(tempPath);
+      file.pipe(writeStream);
     });
 
-    res.json({ text: transcription.text });
-  } catch (error) {
-    console.error("Transcription error:", error);
-    res.status(500).json({
-      error: "Transcription failed",
-      details: error.message,
+    busboy.on("finish", async () => {
+      if (!tempPath) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        return res.end(JSON.stringify({ error: "No file provided" }));
+      }
+
+      try {
+        const transcription = await openai.audio.transcriptions.create({
+          file: fs.createReadStream(tempPath),
+          model: "gpt-4o-mini-transcribe",
+        });
+
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ text: transcription.text }));
+      } catch (err) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: err.message }));
+      } finally {
+        fs.unlink(tempPath, () => {});
+      }
     });
+
+    req.pipe(busboy);
+    return;
   }
-});
 
-// REQUIRED for Render
-const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => {
-  console.log(`Transcriber running on port ${PORT}`);
+  // Health check
+  res.writeHead(200);
+  res.end("OK");
+}).listen(process.env.PORT || 10000, () => {
+  console.log("Transcriber running");
 });
