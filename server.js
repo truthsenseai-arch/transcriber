@@ -20,7 +20,15 @@ async function readAll(req) {
 }
 
 const server = http.createServer(async (req, res) => {
-  console.log("REQ:", req.method, req.url, "CT:", req.headers["content-type"], "CL:", req.headers["content-length"]);
+  console.log(
+    "REQ:",
+    req.method,
+    req.url,
+    "CT:",
+    req.headers["content-type"],
+    "CL:",
+    req.headers["content-length"]
+  );
 
   if (req.method === "GET" && req.url === "/") {
     res.writeHead(200, { "Content-Type": "text/plain" });
@@ -30,15 +38,12 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "POST" && req.url === "/transcribe") {
     try {
       const ct = String(req.headers["content-type"] || "");
-
-      // We expect raw bytes now
       if (!ct.includes("application/octet-stream")) {
         return json(res, 415, { error: "Expected application/octet-stream" });
       }
 
       const bytes = await readAll(req);
       console.log("REQ bytes length:", bytes.length);
-
       if (!bytes.length) return json(res, 400, { error: "Empty body" });
 
       const tmpPath = `/tmp/audio-${Date.now()}.m4a`;
