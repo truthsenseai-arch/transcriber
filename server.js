@@ -4,11 +4,8 @@ import OpenAI from "openai";
 import fs from "fs";
 import { writeFile, unlink } from "fs/promises";
 
-// ---------- Config ----------
 const PORT = process.env.PORT || 10000;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-
-// Use gpt-4o-mini-transcribe by default, but you can set TRANSCRIBE_MODEL=whisper-1 if you want.
 const TRANSCRIBE_MODEL = process.env.TRANSCRIBE_MODEL || "gpt-4o-mini-transcribe";
 
 console.log("[BOOT] OPENAI_API_KEY present?", !!OPENAI_API_KEY);
@@ -16,7 +13,6 @@ console.log("[BOOT] TRANSCRIBE_MODEL:", TRANSCRIBE_MODEL);
 
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
-// ---------- Helpers ----------
 function json(res, status, obj) {
   res.writeHead(status, {
     "Content-Type": "application/json",
@@ -45,23 +41,20 @@ function safeStr(v) {
   }
 }
 
-function inferExtFromContentType(ct) {
+function inferExt(ct) {
   const c = (ct || "").toLowerCase();
   if (c.includes("audio/mpeg") || c.includes("audio/mp3")) return "mp3";
   if (c.includes("audio/wav")) return "wav";
   if (c.includes("audio/webm")) return "webm";
   if (c.includes("audio/ogg")) return "ogg";
-  if (c.includes("audio/mp4") || c.includes("audio/m4a") || c.includes("audio/aac")) return "m4a";
   if (c.includes("audio/flac")) return "flac";
+  if (c.includes("audio/mp4") || c.includes("audio/m4a") || c.includes("audio/aac")) return "m4a";
   return "m4a";
 }
 
-// ---------- Server ----------
 const server = http.createServer(async (req, res) => {
   const ct = req.headers["content-type"];
   const cl = req.headers["content-length"];
-
-  // Basic request log
   console.log("REQ:", req.method, req.url, "CT:", ct, "CL:", cl);
 
   // CORS preflight
@@ -76,9 +69,7 @@ const server = http.createServer(async (req, res) => {
 
   // Health checks
   if (req.method === "GET" || req.method === "HEAD") {
-    if (req.url === "/" || req.url === "/healthz") {
-      return text(res, 200, "TruthSense Transcriber OK");
-    }
+    if (req.url === "/" || req.url === "/healthz") return text(res, 200, "TruthSense Transcriber OK");
     if (req.url === "/favicon.ico") {
       res.writeHead(204);
       return res.end();
@@ -87,35 +78,33 @@ const server = http.createServer(async (req, res) => {
 
   // Main endpoint
   if (req.method === "POST" && req.url === "/transcribe") {
-    if (!OPENAI_API_KEY) {
-      return json(res, 500, { error: "OPENAI_API_KEY missing on server" });
-    }
+    if (!OPENAI_API_KEY) return json(res, 500, { error: "OPENAI_API_KEY missing on server" });
 
     let tmpPath = null;
 
     try {
-      const contentType = safeStr(ct).toLowerCase();
       console.log("TRANSCRIBE: start");
       console.log("TRANSCRIBE: using model:", TRANSCRIBE_MODEL);
 
-      // Wrap Node request -> Web Request so we can do request.formData() on multipart
+      // Convert Node req into a Web Request so we can use formData() for multipart
       const webReq = new Request(`http://localhost${req.url}`, {
         method: req.method,
         headers: req.headers,
         body: req,
-        duplex: "half", // REQUIRED in Node for streaming request bodies
+        duplex: "half",
       });
 
+      const contentType = safeStr(ct).toLowerCase();
       let audioBuffer;
       let fileName = null;
       let fileType = null;
 
+      // Case 1: multipart/form-data (expects field name "file")
       if (contentType.includes("multipart/form-data")) {
         console.log("TRANSCRIBE: parsing multipart/form-data");
         const formData = await webReq.formData();
-
-        // expects field name "file"
         const file = formData.get("file");
+
         if (!file) {
           return json(res, 400, {
             error: 'No file provided (expected form field name "file")',
@@ -126,38 +115,27 @@ const server = http.createServer(async (req, res) => {
         fileName = file.name;
         fileType = file.type;
 
-        console.log("TRANSCRIBE: got multipart file:", {
-          name: fileName,
-          type: fileType,
-          size: file.size,
-        });
-
+        console.log("TRANSCRIBE: got multipart file:", { name: fileName, type: fileType, size: file.size });
         audioBuffer = Buffer.from(await file.arrayBuffer());
       } else {
-        // Raw body (octet-stream OR audio/*)
+        // Case 2: raw body (octet-stream or audio/*)
         console.log("TRANSCRIBE: parsing raw body");
         const ab = await webReq.arrayBuffer();
         audioBuffer = Buffer.from(ab);
 
-        console.log("TRANSCRIBE: got raw body bytes:", {
-          bytes: audioBuffer.length,
-          ct: contentType || "(none)",
-        });
+        console.log("TRANSCRIBE: got raw body bytes:", { bytes: audioBuffer.length, ct: contentType || "(none)" });
 
-        if (!audioBuffer.length) {
-          return json(res, 400, { error: "Empty request body" });
-        }
+        if (!audioBuffer.length) return json(res, 400, { error: "Empty request body" });
       }
 
-      const ext = inferExtFromContentType(fileType || contentType);
+      // Write to /tmp
+      const ext = inferExt(fileType || contentType);
       tmpPath = `/tmp/audio-${Date.now()}.${ext}`;
-
       await writeFile(tmpPath, audioBuffer);
       console.log("TRANSCRIBE: wrote temp file:", tmpPath);
 
-      const t0 = Date.now();
-
       // OpenAI transcription
+      const t0 = Date.now();
       const transcription = await openai.audio.transcriptions.create({
         file: fs.createReadStream(tmpPath),
         model: TRANSCRIBE_MODEL,
@@ -166,16 +144,13 @@ const server = http.createServer(async (req, res) => {
       const ms = Date.now() - t0;
       const outText = safeStr(transcription?.text);
 
-      console.log("TRANSCRIBE: success:", {
-        ms,
-        chars: outText.length,
-      });
+      console.log("TRANSCRIBE: success:", { ms, chars: outText.length });
 
-      // IMPORTANT: return the structure Base44 pipeline expects
+      // IMPORTANT: return BOTH "text" and "transcript" so Base44 can't miss it
       return json(res, 200, {
+        text: outText || "",
         transcript: outText || "",
         segments: outText ? [{ start: 0, end: 0, text: outText }] : [],
-        audio_timeline: outText ? [{ start: 0, end: 0, text: outText }] : [],
         metadata: {
           service: "render-transcriber",
           model: TRANSCRIBE_MODEL,
@@ -185,7 +160,6 @@ const server = http.createServer(async (req, res) => {
         },
       });
     } catch (err) {
-      // Log deeply (Render logs)
       console.error("TRANSCRIBE ERROR:", {
         message: err?.message,
         status: err?.status,
@@ -207,17 +181,12 @@ const server = http.createServer(async (req, res) => {
         try {
           await unlink(tmpPath);
           console.log("TRANSCRIBE: cleaned temp file:", tmpPath);
-        } catch {
-          // ignore cleanup errors
-        }
+        } catch {}
       }
     }
   }
 
-  // Fallback
   return json(res, 404, { error: "Not found" });
 });
 
-server.listen(PORT, () => {
-  console.log("[BOOT] listening on", PORT);
-});
+server.listen(PORT, () => console.log("[BOOT] listening on", PORT));
