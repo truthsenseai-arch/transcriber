@@ -10,7 +10,7 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-const server = http.createServer(async (req, res) => {
+const server = http.createServer(async (req, res) => {console.log("REQ:", req.method, req.url);
   if (req.method === "GET") {
     res.writeHead(200);
     return res.end("TruthSense Transcriber OK");
@@ -18,7 +18,14 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === "POST" && req.url === "/transcribe") {
     try {
-      const formData = await req.formData();
+      const request = new Request(`http://localhost${req.url}`, {
+  method: req.method,
+  headers: req.headers,
+  body: req,
+  duplex: "half", // important on Node when body is a stream
+});
+
+const formData = await request.formData();
       const file = formData.get("file");
 
       if (!file) {
